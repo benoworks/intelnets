@@ -1,0 +1,3 @@
+timestamp,rssi,local_ping,public_ping,dns_time,http_status,http_time
+33763,-38,6,191,1000,0,1000
+63963,-43,5,46,1000,0,1000
