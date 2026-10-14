@@ -2,6 +2,7 @@
 import sys
 import os
 import glob
+import re
 
 # Transparently switch to ESP-IDF Python if pyserial is not installed in current interpreter
 try:
@@ -23,10 +24,12 @@ import time
 
 def capture_dataset(port, output_file, target_rows):
     print(f"Connecting to {port}...")
-    ser = serial.Serial(port, 115200, timeout=3)
+    ser = serial.Serial(port, 115200, timeout=2)
 
     rows_captured = 0
     print(f"Capturing {target_rows} rows into '{output_file}'...")
+
+    pattern = re.compile(r'(\d+),(-?\d+),(\d+),(\d+),(\d+),(\d+),(\d+)')
 
     with open(output_file, 'w', encoding='utf-8') as f:
         # Write clean header on line 1
@@ -35,40 +38,31 @@ def capture_dataset(port, output_file, target_rows):
 
         while rows_captured < target_rows:
             try:
-                line = ser.readline().decode('utf-8', errors='ignore').strip()
+                raw = ser.readline().decode('utf-8', errors='ignore')
             except Exception as e:
                 print(f"Serial read error: {e}")
                 continue
 
-            if not line:
+            if not raw:
                 continue
 
-            # Skip header if printed by device
-            if "timestamp,rssi,local_ping" in line:
-                continue
+            # Look for 7 CSV values in line
+            m = pattern.search(raw)
+            if m:
+                ts = int(m.group(1))
+                rssi = int(m.group(2))
+                lp = int(m.group(3))
+                pp = int(m.group(4))
+                dns = int(m.group(5))
+                status = int(m.group(6))
+                ht = int(m.group(7))
 
-            # Parse data line
-            parts = line.split(',')
-            if len(parts) == 7:
-                try:
-                    ts = int(parts[0])
-                    rssi = int(parts[1])
-                    lp = int(parts[2])
-                    pp = int(parts[3])
-                    dns = int(parts[4])
-                    status = int(parts[5])
-                    ht = int(parts[6])
+                f.write(f"{ts},{rssi},{lp},{pp},{dns},{status},{ht}\n")
+                f.flush()
+                rows_captured += 1
 
-                    # Write clean row
-                    f.write(f"{ts},{rssi},{lp},{pp},{dns},{status},{ht}\n")
-                    f.flush()
-                    rows_captured += 1
-
-                    if rows_captured % 10 == 0 or rows_captured == target_rows:
-                        print(f"[{rows_captured}/{target_rows}] Sample: {ts},{rssi},{lp},{pp},{dns},{status},{ht}")
-                except ValueError:
-                    # Ignore non-numeric debug logs
-                    continue
+                if rows_captured % 10 == 0 or rows_captured == target_rows:
+                    print(f"[{rows_captured}/{target_rows}] Sample: {ts},{rssi},{lp},{pp},{dns},{status},{ht}")
 
     ser.close()
     print(f"Capture complete! Saved {rows_captured} rows to '{output_file}'.")

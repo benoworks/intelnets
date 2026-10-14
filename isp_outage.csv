@@ -1,5 +1,4 @@
 timestamp,rssi,local_ping,public_ping,dns_time,http_status,http_time
-1786813,-40,6,43,1,204,292
 1789153,-53,3,1000,1,0,1000
 1793173,-42,5,1000,1,0,1000
 1797193,-40,7,1000,1,0,1000

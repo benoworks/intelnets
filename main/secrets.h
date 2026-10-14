@@ -7,5 +7,5 @@
 // Onboard single-color indicator LED GPIO (e.g., GPIO 2 or GPIO 21 depending on ESP32-S3 board)
 #define LED_GPIO        2
 
-// Simulation flag for Phase 1 DNS Outage dataset (sets DNS server to unroutable 10.255.255.255)
-#define SIMULATE_DNS_OUTAGE 1
+// Normal operation (0 = use standard DHCP DNS)
+#define SIMULATE_DNS_OUTAGE 0

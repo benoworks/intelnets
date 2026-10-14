@@ -115,21 +115,50 @@ static uint32_t ping_target(const ip_addr_t *target) {
     return (res.latency > 1000) ? 1000 : res.latency;
 }
 
-// Measure DNS resolution time (ms) for google.com
-static uint32_t sample_dns_time(void) {
+static SemaphoreHandle_t s_dns_req_sem = NULL;
+static SemaphoreHandle_t s_dns_done_sem = NULL;
+static volatile bool s_dns_busy = false;
+static volatile uint32_t s_dns_result_ms = 1000;
+
+static void dns_worker_task(void *pvParameters) {
     struct addrinfo hints = {
         .ai_family = AF_INET,
         .ai_socktype = SOCK_STREAM,
     };
-    struct addrinfo *res = NULL;
-    int64_t start_ms = get_time_ms();
-    int err = getaddrinfo("google.com", "80", &hints, &res);
-    int64_t elapsed_ms = get_time_ms() - start_ms;
+    while (1) {
+        xSemaphoreTake(s_dns_req_sem, portMAX_DELAY);
+        s_dns_busy = true;
 
-    if (err == 0 && res != NULL) {
-        freeaddrinfo(res);
-        return (elapsed_ms > 1000) ? 1000 : (uint32_t)elapsed_ms;
+        struct addrinfo *res = NULL;
+        int64_t start_ms = get_time_ms();
+        int err = getaddrinfo("google.com", "80", &hints, &res);
+        int64_t elapsed_ms = get_time_ms() - start_ms;
+
+        if (err == 0 && res != NULL) {
+            freeaddrinfo(res);
+            s_dns_result_ms = (elapsed_ms > 1000) ? 1000 : (uint32_t)elapsed_ms;
+        } else {
+            s_dns_result_ms = 1000;
+        }
+
+        s_dns_busy = false;
+        xSemaphoreGive(s_dns_done_sem);
     }
+}
+
+// Measure DNS resolution time (ms) for google.com with strict 1000ms non-blocking timeout
+static uint32_t sample_dns_time(void) {
+    if (s_dns_busy) {
+        return 1000;
+    }
+
+    xSemaphoreTake(s_dns_done_sem, 0);
+    xSemaphoreGive(s_dns_req_sem);
+
+    if (xSemaphoreTake(s_dns_done_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        return s_dns_result_ms;
+    }
+
     return 1000;
 }
 
@@ -194,12 +223,8 @@ static void telemetry_task(void *pvParameters) {
                        pdTRUE,
                        portMAX_DELAY);
 
-    // Suppress verbose driver/subsystem logs so stdout output remains uncorrupted CSV data
-    esp_log_level_set("*", ESP_LOG_WARN);
-    esp_log_level_set("ping_sock", ESP_LOG_NONE);
-    esp_log_level_set("wifi", ESP_LOG_NONE);
-    esp_log_level_set("esp_netif_handlers", ESP_LOG_NONE);
-    esp_log_level_set("HTTP_CLIENT", ESP_LOG_NONE);
+    // Suppress all logs completely so stdout remains exclusively uncorrupted CSV data
+    esp_log_level_set("*", ESP_LOG_NONE);
 
     // Print clean CSV header
     printf("timestamp,rssi,local_ping,public_ping,dns_time,http_status,http_time\n");
@@ -248,7 +273,7 @@ static void telemetry_task(void *pvParameters) {
         // 5 & 6. Transport / Captive Portal: HTTP 204 status code and response latency
         int http_status = 0;
         uint32_t http_time = 1000;
-        if (s_wifi_connected) {
+        if (s_wifi_connected && dns_time < 1000) {
             sample_http(&http_status, &http_time);
         }
 
@@ -323,6 +348,11 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "Wi-Fi initialization complete. Awaiting connection...");
 
-    // 6. Spawn telemetry task with dedicated 8KB stack
+    // 6. Initialize DNS worker task and semaphores
+    s_dns_req_sem = xSemaphoreCreateBinary();
+    s_dns_done_sem = xSemaphoreCreateBinary();
+    xTaskCreate(dns_worker_task, "dns_worker", 4096, NULL, 4, NULL);
+
+    // 7. Spawn telemetry task with dedicated 8KB stack
     xTaskCreate(telemetry_task, "telemetry_task", 8192, NULL, 5, NULL);
 }
